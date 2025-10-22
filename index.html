@@ -1,12 +1,50 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>JS | Variables and Methods</title>
-    <script src="script.js"></script>
+  <meta charset="UTF-8" />
+  <title>Unit 8.5 – Arrays (Inputs + textContent)</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 2rem; }
+    .row { margin: .5rem 0; }
+    ul { padding-left: 1.25rem; }
+    .outputs p { margin: .25rem 0; }
+    .err { color: #b00020; }
+  </style>
 </head>
 <body>
-    <h1>Your html goes here...</h1>
-    <br>See the <a href="README.md">README</a> for project details
+  <h1>Unit 8.5 – Arrays</h1>
+
+  <div class="row">
+    <label>Traffic light color:
+      <input id="color" type="text" placeholder="red / yellow / green" />
+    </label>
+  </div>
+
+  <div class="row">
+    <strong>Five numbers:</strong>
+    <div>
+      <input id="n1" type="number" step="any" />
+      <input id="n2" type="number" step="any" />
+      <input id="n3" type="number" step="any" />
+      <input id="n4" type="number" step="any" />
+      <input id="n5" type="number" step="any" />
+    </div>
+  </div>
+
+  <div class="row">
+    <button onclick="runJS()">Run</button>
+  </div>
+
+  <div class="row outputs">
+    <p id="feedback" class="err"></p>
+    <h3>Actions (x5)</h3>
+    <ul id="actionList"></ul>
+
+    <h3>Numbers summary</h3>
+    <p id="average"></p>
+    <p id="evenCount"></p>
+  </div>
+
+  <script src="script.js"></script>
 </body>
 </html>
