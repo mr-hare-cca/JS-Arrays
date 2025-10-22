@@ -10,7 +10,7 @@ function runJS() {
   // clear outputs each run
   feedback.textContent = '';
   list.innerHTML = '';
-  avgOut.textContent = '';
+  avgOut.textContent = ''; 
   evensOut.textContent = '';
 
   const rawColor = (colorInput.value || '').trim().toLowerCase();
