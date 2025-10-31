@@ -1,4 +1,4 @@
-name: Guessing Game Autograding
+name: "Classroom Autograder – Unit 8.5: Arrays (Console + Prompt)"
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
 jobs:
   autograde:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -15,17 +14,17 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: 20
 
       - name: Bootstrap test harness files
         shell: bash
         run: |
           mkdir -p tests
 
-          # package.json
+          # 1. Create package.json (Node.js environment)
           cat > package.json <<'PKG'
           {
-            "name": "apcsp-guessing-game-ci",
+            "name": "unit-8-5-prompts-consolelog",
             "version": "1.0.0",
             "private": true,
             "scripts": {
@@ -33,267 +32,93 @@ jobs:
             },
             "devDependencies": {
               "jest": "^29.7.0",
-              "jest-environment-jsdom": "^29.7.0",
-              "jsdom": "^24.0.0"
+              "jest-environment-node": "^29.7.0"
             }
           }
           PKG
 
-          # jest.config.js
-          cat > jest.config.js <<'JCONF'
+          # 2. Create Jest config (using CommonJS)
+          cat > jest.config.js <<'JEST'
           module.exports = {
-            testEnvironment: "jsdom",
+            testEnvironment: "node",
             roots: ["<rootDir>/tests"],
-            collectCoverage: false,
-            setupFiles: ["<rootDir>/tests/jest.polyfills.js"]
+            testMatch: ["**/tests/**/*.test.cjs"],
           };
-          JCONF
+          JEST
 
-          # tests/jest.polyfills.js
-          cat > tests/jest.polyfills.js <<'POLY'
-          const { TextEncoder, TextDecoder } = require('util');
-          if (typeof global.TextEncoder === 'undefined') global.TextEncoder = TextEncoder;
-          if (typeof global.TextDecoder === 'undefined') global.TextDecoder = TextDecoder;
-          if (typeof global.crypto === 'undefined') {
-            try { const { webcrypto } = require('crypto'); if (webcrypto) global.crypto = webcrypto; } catch (_) {}
-          }
-          POLY
+          # 3. Create the VM-based test file
+          cat > tests/script.test.cjs <<'TEST'
+          const fs = require("node:fs");
+          const vm = require("node:vm");
+          const path = require("node:path");
 
-          # ----------------------------------------------------------------
-          # NEW: tests/_domHarness.js (Script Injection Method)
-          # Reads HTML and JS as text, injects the script into the HTML,
-          # and then loads the combined string into JSDOM.
-          # This is the most reliable way to simulate a browser.
-          # ----------------------------------------------------------------
-          cat > tests/_domHarness.js <<'HARNESS'
-          const fs = require("fs");
-          const path = require("path");
-          const { JSDOM } = require("jsdom");
-
-          // Helper to find files in common locations
-          function findFile(filename, searchPaths = ['.', 'public', 'src', 'docs']) {
-            for (const p of searchPaths) {
-              const fullPath = path.join(process.cwd(), p, filename);
-              if (fs.existsSync(fullPath)) {
-                return fullPath;
-              }
+          // Helper to load and run student code in a sandbox
+          const loadStudent = (answers) => {
+            const codePath = path.resolve("script.js");
+            if (!fs.existsSync(codePath)) {
+              throw new Error("script.js not found. Make sure your file is in the root of the repository.");
             }
-            return null; // Not found
-          }
+            const code = fs.readFileSync(codePath, "utf8");
 
-          function loadDomAndScript() {
-            const htmlPath = findFile("index.html");
-            if (!htmlPath) throw new Error("index.html not found in ., public, src, or docs");
-            
-            const scriptPath = findFile("script.js", ['.', 'public', 'src', 'docs']);
-            if (!scriptPath) throw new Error("script.js not found in ., public, src, or docs");
+            const logs = [];
+            const sandbox = {
+              console: { 
+                log: (...args) => logs.push(args.map(String).join(" ")),
+                warn: (...args) => logs.push(args.map(String).join(" ")),
+                error: (...args) => logs.push(args.map(String).join(" ")),
+              },
+              prompt: (() => {
+                const queue = [...answers];
+                return () => String(queue.shift() ?? "");
+              })(),
+            };
 
-            let html = fs.readFileSync(htmlPath, "utf8");
-            const script = fs.readFileSync(scriptPath, "utf8");
+            vm.createContext(sandbox);
+            const script = new vm.Script(code, { filename: "script.js" });
+            script.runInContext(sandbox);
 
-            // Inject the script just before the closing </body> tag
-            // This guarantees the DOM is ready before the script runs
-            html = html.replace(
-              /<\/body>/i,
-              `<script>${script}</script></body>`
-            );
-            
-            const dom = new JSDOM(html, { 
-              url: "file://" + path.dirname(htmlPath) + "/", 
-              runScripts: "dangerously", 
-              resources: "usable" 
+            return { logs, code };
+          };
+
+          const countOccurrences = (arr, needle) =>
+            arr.reduce((acc, line) => acc + (line.trim().toLowerCase() === needle.toLowerCase() ? 1 : 0), 0);
+
+          describe("Unit 8.5 - Arrays (Console/Prompt)", () => {
+
+            test("REQUIRED: valid color prints correct action five times; average and evens correct", () => {
+              const { logs } = loadStudent(["green", "1", "2", "3", "4", "5"]);
+              
+              const goCount = countOccurrences(logs, "Action: Go");
+              expect(goCount).toBeGreaterThanOrEqual(5);
+              expect(logs.find(l => /Invalid color/i.test(l))).toBeUndefined();
+
+              const avgLine = logs.find(l => /^Average:\s*-?\d+(?:\.\d+)?$/.test(l.trim()));
+              expect(avgLine).toBeDefined();
+              const avgValue = Number(avgLine.split(":")[1].trim());
+              expect(avgValue).toBeCloseTo(3, 6);
+
+              const evenLine = logs.find(l => /^Even count:\s*\d+$/.test(l.trim()));
+              expect(evenLine).toBeDefined();
+              const evenVal = Number(evenLine.split(":")[1].trim());
+              expect(evenVal).toBe(2);
             });
 
-            global.window = dom.window;
-            global.document = dom.window.document;
-            global.HTMLElement = dom.window.HTMLElement;
-            global.Node = dom.window.Node;
+            test("INVALID_COLOR: prints 'Invalid color' and does not print five actions", () => {
+              const { logs } = loadStudent(["blue", "10", "20", "30", "40", "50"]);
+              const invalid = logs.find(l => /^Invalid color$/i.test(l.trim()));
+              expect(invalid).toBeDefined();
 
-            // Expose element IDs to the Jest 'global' context
-            document.querySelectorAll("[id]").forEach(el => { if (el.id) global[el.id] = el; });
+              const totalActions = logs.filter(l => /^Action:/.test(l.trim())).length;
+              expect(totalActions).toBeLessThan(5);
+            });
+
+            test("NO_FUNCTIONS: no function or arrow syntax used", () => {
+              const { code } = loadStudent(["red", "1", "2", "3", "4", "5"]);
+              expect(/\bfunction\b/.test(code) || /=>/.test(code)).toBe(false);
+            });
             
-            return dom.window;
-          }
-
-          module.exports = { loadDomAndScript };
-          HARNESS
-
-          # ----------------------------------------------------------------
-          # NEW: tests/guessingGame.test.js
-          # Now just calls the new loadDomAndScript() function, which
-          # is wrapped in a try...catch block.
-          # ----------------------------------------------------------------
-          cat > tests/guessingGame.test.js <<'TESTS'
-          const fs = require("fs");
-          const { loadDomAndScript } = require("./_domHarness");
-
-          let checks = [];
-          const add = (name, max, pass) => checks.push({ name, max, awarded: pass ? max : 0 });
-          const text = (el) => (el && el.textContent ? el.textContent.trim() : "");
-          const click = (el) => { try { el && el.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); } catch {} };
-          const input = (el, v) => { try { if (el) { el.value = v; el.dispatchEvent(new window.Event("input", { bubbles: true })); } } catch {} };
-          const $ = (sel) => (document ? document.querySelector(sel) : null);
-          const has = (sel) => !!$(sel);
-
-          let scriptCrashError = null;
-
-          afterAll(() => {
-            const total = checks.reduce((s, c) => s + c.awarded, 0);
-            const max = Math.max(1, checks.reduce((s, c) => s + c.max, 0));
-            const percent = Math.round((total / max) * 100);
-            fs.writeFileSync("grade-report.json", JSON.stringify({ total, max, percent, checks, scriptCrashError }, null, 2));
-            console.log(`GRADE: ${total}/${max} (${percent}%)`);
-            if (scriptCrashError) console.error("Script failed to run:", scriptCrashError);
           });
-
-          describe("AP CSP Guessing Game — Rubric (crash-proof)", () => {
-            beforeAll(() => {
-              try {
-                // This one function now loads HTML and runs the script
-                loadDomAndScript();
-              } catch (e) {
-                // This will catch the "giveUp.addEventListener" error
-                scriptCrashError = e.message;
-                console.error("Error encountered while loading DOM or running script.js:", e.message);
-              }
-            });
-
-            // ---------- Preflight / Structure (10 points) ----------
-            test("Required UI elements are present", () => {
-              const req = ["#date","#playBtn","#guess","#guessBtn","#msg","#wins","#avgScore"];
-              const ok = req.every(sel => has(sel));
-              add("Required UI elements are present", 10, ok);
-              expect(true).toBe(true);
-            });
-
-            // ---------- Functional base (61 points) ----------
-            test("Current date/time is displayed", () => {
-              add("Current date/time is displayed", 6, text($("#date")).length > 0);
-              expect(true).toBe(true);
-            });
-
-            test("Three difficulty levels are available", () => {
-              const radios = document ? document.querySelectorAll('input[type="radio"][name="level"]') : [];
-              add("Three difficulty levels are available", 6, radios && radios.length >= 3);
-              expect(true).toBe(true);
-            });
-
-            test("Game can start and prompts for a guess", () => {
-              click($("#playBtn"));
-              const g = $("#guess"), gb = $("#guessBtn"), m = $("#msg");
-              const enabled = !!g && !!gb && !g.disabled && !gb.disabled;
-              const promptsRange = /guess/i.test(text(m));
-              add("Game can start and prompts for a guess", 12, enabled && promptsRange);
-              expect(true).toBe(true);
-            });
-
-            test("Detects a correct guess (win)", () => {
-              const m = text($("#msg"));
-              const match = m.match(/1-(\d+)/);
-              const range = match ? parseInt(match[1], 10) : 10;
-              const g = $("#guess"), gb = $("#guessBtn");
-              let won = false;
-              if (g && gb && /guess/i.test(m)) {
-                for (let i = 1; i <= range && !won; i++) {
-                  input(g, String(i)); click(gb);
-                  won = /correct/i.test(text($("#msg")));
-                }
-              }
-              add("Detects a correct guess (win)", 10, won);
-              expect(true).toBe(true);
-            });
-
-            test("Wins counter and average score update", () => {
-              add("Wins counter updates", 5, /Total wins:\s*\d+/.test(text($("#wins"))));
-              add("Average score updates", 5, /Average Score:\s*\d+(\.\d+)?/.test(text($("#avgScore"))));
-              expect(true).toBe(true);
-            });
-
-            test("Leaderboard shows top 3 (ascending)", () => {
-              click($("#playBtn"));
-              const g = $("#guess"), gb = $("#guessBtn");
-              let tries = 0, won = false;
-              if (g && gb && !g.disabled) {
-                while (!won && tries < 20) {
-                  tries++; input(g, String(tries)); click(gb);
-                  won = /correct/i.test(text($("#msg")));
-                }
-              }
-              const rows = Array.from(document ? document.getElementsByName("leaderboard") : []);
-              const vals = rows.map(li => parseInt(text(li), 10)).filter(n => !isNaN(n));
-              const nonDefault = vals.some(v => v !== 100);
-              const ascending = vals.length >= 2 ? vals.slice(1).every((v, i) => v >= vals[i]) : false;
-              add("Leaderboard shows top 3 (ascending)", 9, nonDefault && ascending);
-              expect(true).toBe(true);
-            });
-
-            // ---------- Optional/Give Up + UX (29 points) ----------
-            test("Give Up button exists and works (optional)", () => {
-              const btn = $("#giveUpBtn") || $("#giveUp"); // Check both IDs
-              const hasBtn = !!btn;
-              let works = false;
-              if (hasBtn) {
-                try { click($("#playBtn")); click(btn); works = /correct|win|gave up|end/i.test(text($("#msg"))); } catch {}
-              }
-              add("Give Up button exists", 3, hasBtn);
-              add("Give Up action works (ends round)", 3, works);
-              expect(true).toBe(true);
-            });
-
-            test("Gives Cold/Warm/Hot feedback", () => {
-              click($("#playBtn"));
-              const g = $("#guess"), gb = $("#guessBtn");
-              input(g, "1"); click(gb);
-              add("Gives Cold/Warm/Hot feedback", 8, /hot|warm|cold/i.test(text($("#msg"))));
-              expect(true).toBe(true);
-            });
-
-            test("Shows a qualitative message about performance", () => {
-              add("Shows a qualitative message about performance", 8, /good|great|ok|okay|bad/i.test(text($("#msg"))));
-              expect(true).toBe(true);
-            });
-            
-            test("Inputs are validated (blank/NaN not treated as correct)", () => {
-              click($("#playBtn"));
-              const g = $("#guess"), gb = $("#guessBtn"), m = $("#msg");
-              input(g, ""); click(gb);
-              const msg1 = text(m).toLowerCase();
-              input(g, "abc"); click(gb);
-              const msg2 = text(m).toLowerCase();
-              const pass = (msg1.length > 0 && !/correct|low|high/.test(msg1)) &&
-                           (msg2.length > 0 && !/correct|low|high/.test(msg2));
-              add("Inputs are validated (blank/NaN not treated as correct)", 7, pass);
-              expect(true).toBe(true);
-            });
-
-            // ---------- Next steps / HTML hygiene (15 points) ----------
-            test("Reset button is present (type='reset')", () => {
-              add("Reset button is present (type='reset')", 3, !!document?.querySelector("button#reset[type='reset']"));
-              expect(true).toBe(true);
-            });
-
-            test("Accessibility labels exist for inputs", () => {
-              const fors = [...(document?.querySelectorAll('label[for]') || [])].map(l => l.getAttribute('for'));
-              add("Accessibility labels exist for inputs", 3, ['e','m','h','guess'].every(id => fors.includes(id)));
-              expect(true).toBe(true);
-            });
-
-            test("Viewport meta tag is included", () => {
-              const vp = document?.querySelector('meta[name="viewport"]');
-              add("Viewport meta tag is included", 3, !!vp && /width=device-width/.test(vp.content || ''));
-              expect(true).toBe(true);
-            });
-
-            test("Semantic HTML elements are used", () => {
-              add("Semantic HTML elements are used", 3, !!(document?.querySelector('main,section,footer')));
-              expect(true).toBe(true);
-            });
-            
-            // Note: "No console errors" and "Meaningful commits" are worth 3 points each
-            // but are graded manually or by observation.
-            add("Placeholder for 'No Console Errors'", 3, true);
-          });
-          TESTS
+          TEST
 
       - name: Debug File Structure
         if: always()
@@ -304,94 +129,76 @@ jobs:
           echo "---- END DEBUG: File System Structure ----"
 
       - name: Install dependencies
-        run: npm ci || npm i
+        run: npm install
 
-      - name: Run Jest (produces grade-report.json)
-        id: run_jest
-        continue-on-error: true
-        run: npm test
+      # ----------------------------------------------------------------
+      # NEW: Simplified Graders
+      # Runs each test one by one and captures the result.
+      # This is the correct way to use the autograding-reporter.
+      # ----------------------------------------------------------------
+      - name: Run REQUIRED tests
+        id: t_required
+        uses: classroom-resources/autograding-command-grader@v1
+        with:
+          test-name: "REQUIRED: Full functionality"
+          command: "npx jest --runInBand --testNamePattern 'REQUIRED:'"
+          timeout: 10
+          max-score: 60
 
-      - name: Debug Jest Output
+      - name: Run INVALID_COLOR tests
+        id: t_invalid_color
+        uses: classroom-resources/autograding-command-grader@v1
+        with:
+          test-name: "INVALID_COLOR: Handles invalid color"
+          command: "npx jest --runInBand --testNamePattern 'INVALID_COLOR:'"
+          timeout: 10
+          max-score: 25
+
+      - name: Run NO_FUNCTIONS tests
+        id: t_no_functions
+        uses: classroom-resources/autograding-command-grader@v1
+        with:
+          test-name: "NO_FUNCTIONS: No functions used"
+          command: "npx jest --runInBand --testNamePattern 'NO_FUNCTIONS:'"
+          timeout: 10
+          max-score: 15
+
+      - name: Prepare reporter env
+        id: prep_env
         if: always()
         shell: bash
         run: |
-          echo "---- DEBUG: Contents of grade-report.json ----"
-          if [ -f grade-report.json ]; then
-            cat grade-report.json
-          else
-            echo "grade-report.json not found."
-          fi
-          echo "---- END DEBUG ----"
-
-      # ----------------------------------------------------------------
-      # NEW: Simplified Grading
-      # This single step reads the grade-report.json and creates
-      # the points.json file for the reporter.
-      # ----------------------------------------------------------------
-      - name: Parse Grade Report for Reporter
-        id: parse_grade
-        if: always()
-        shell: bash
-        run: |
-          if [ ! -f grade-report.json ]; then
-            echo '{ "total": 0, "max": 115, "percent": 0, "checks": [] }' > grade-report.json
-          fi
-          # This command transforms our report into the format the reporter needs
-          jq '[.checks[] | {test_name: .name, points: .awarded, max_points: .max}]' grade-report.json > points.json
-          echo "---- DEBUG: Contents of points.json ----"
-          cat points.json
-          echo "---- END DEBUG ----"
+          echo "T_REQUIRED_RESULTS=${{ steps.t_required.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_INVALID_COLOR_RESULTS=${{ steps.t_invalid_color.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_NO_FUNCTIONS_RESULTS=${{ steps.t_no_functions.outputs.result }}" >> "$GITHUB_ENV"
 
       - name: Classroom Reporter
         id: reporter
         if: always()
         uses: classroom-resources/autograding-grading-reporter@v1
         with:
-          # This tells the reporter to read our new JSON file
-          points: './points.json'
+          runners: 't_required,t_invalid_color,t_no_functions'
           token: ${{ github.token }}
 
       - name: Show grade in summary
         if: always()
+        shell: bash
         run: |
-          if [ -f grade-report.json ]; then
-            TOTAL=$(jq -r '.total' grade-report.json)
-            # Re-calculate max points to be safe
-            MAX=$(jq -r '[(.checks[] | .max)] | add' grade-report.json)
-            PCT=$(jq -r '.percent' grade-report.json)
-            {
-              echo "## Guessing Game — Autograder Summary"
-              echo
-              echo "**Score:** $TOTAL / $MAX ($PCT%)"
-              echo
-              # Print crash error if it exists
-              CRASH_MSG=$(jq -r '.scriptCrashError // ""' grade-report.json)
-              if [ -n "$CRASH_MSG" ] && [ "$CRASH_MSG" != "null" ]; then
-                echo "---"
-                echo "🚨 **Your \`script.js\` file crashed!**"
-                echo
-                echo "This is why most functional tests are failing. Fix this error:"
-                echo "\`\`\`"
-                echo "$CRASH_MSG"
-                echo "\`\`\`"
-                echo "---"
-              fi
-              echo
-              echo "| Check | Points | Max | Passed |"
-              echo "|---|---:|---:|:---:|"
-              jq -r '.checks[] |
-                "| \(.name) | \(.awarded) | \(.max) | \(if .awarded == .max then "✅" else "❌" end) |"
-              ' grade-report.json
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            {
-              echo "## Grade Report Failed"
-              echo
-              echo "No grade-report.json file was found. This usually means the Jest test run crashed."
-              echo
-              echo "Common causes:"
-              echo "- A syntax error in script.js (check the 'Run Jest' log above)"
-              echo "- A missing index.html or script.js (check 'Debug File Structure')"
-              echo "- npm install failed"
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "## Unit 8.5 — Autograder Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Check | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          
+          parse_json () {
+            if [ -z "$1" ]; then
+              echo "❌ Skipped";
+              return
+            fi
+            # Use jq to safely parse the status
+            PASS=$(echo $1 | jq -r 'if .status == "pass" then "✅ Pass" else "❌ Fail" end')
+            echo $PASS
+          }
+          
+          echo "| REQUIRED: Full functionality | $(parse_json '${{ steps.t_required.outputs.result }}') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| INVALID_COLOR: Handles invalid color | $(parse_json '${{ steps.t_invalid_color.outputs.result }}') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| NO_FUNCTIONS: No functions used | $(parse_json '${{ steps.t_no_functions.outputs.result }}') |" >> "$GITHUB_STEP_SUMMARY"
