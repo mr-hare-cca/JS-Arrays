@@ -16,37 +16,57 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install test deps
+      - name: Bootstrap test harness files
+        shell: bash
         run: |
-          npm init -y >/dev/null 2>&1 || true
-          npm install --save-dev jest@29 jsdom@21 jest-environment-jsdom@29
+          mkdir -p tests
 
-      - name: Create Jest setup
-        run: |
-          cat > jest.setup.cjs <<'EOF'
+          # 1. Create package.json
+          cat > package.json <<'PKG'
+          {
+            "name": "unit-8-5-ci",
+            "version": "1.0.0",
+            "private": true,
+            "scripts": {
+              "test": "jest --runInBand"
+            },
+            "devDependencies": {
+              "jest": "^29.7.0",
+              "jest-environment-jsdom": "^29.7.0",
+              "jsdom": "^24.0.0",
+              "jest-junit": "^16.0.0"
+            }
+          }
+          PKG
+
+          # 2. Create Jest config (Using CommonJS 'module.exports')
+          cat > jest.config.js <<'JCONF'
+          module.exports = {
+            testEnvironment: 'jsdom',
+            setupFiles: ['<rootDir>/tests/jest.polyfills.js'],
+            // Tell Jest to look for tests in the 'tests' directory
+            roots: ['<rootDir>/tests'],
+            reporters: [
+              "default",
+              ["./node_modules/jest-junit", { "outputDirectory": ".", "outputName": "jest-results.xml" }]
+            ]
+          };
+          JCONF
+
+          # 3. Create polyfills
+          cat > tests/jest.polyfills.js <<'POLY'
           const { TextEncoder, TextDecoder } = require('util');
           if (typeof global.TextEncoder === 'undefined') global.TextEncoder = TextEncoder;
           if (typeof global.TextDecoder === 'undefined') global.TextDecoder = TextDecoder;
-          EOF
+          POLY
 
-      - name: Create Jest config
-        run: |
-          cat > jest.config.js <<'EOF'
-          module.exports = {
-            testEnvironment: 'jsdom',
-            setupFiles: ['<rootDir>/jest.setup.cjs'],
-            testMatch: ['<rootDir>/tests/**/*.test.cjs']
-          };
-          EOF
-
-      - name: Create Test Harness
-        run: |
-          mkdir -p tests
+          # 4. Create the robust "Script-Injection" Test Harness
           cat > tests/_domHarness.js <<'HARNESS'
           const fs = require("fs");
           const path = require("path");
           const { JSDOM } = require("jsdom");
 
+          // Helper to find files in common locations
           function findFile(filename, searchPaths = ['.', 'public', 'src', 'docs']) {
             for (const p of searchPaths) {
               const fullPath = path.join(process.cwd(), p, filename);
@@ -54,7 +74,7 @@ jobs:
                 return fullPath;
               }
             }
-            return null;
+            return null; // Not found
           }
 
           function loadDomAndScript() {
@@ -67,6 +87,8 @@ jobs:
             let html = fs.readFileSync(htmlPath, "utf8");
             const script = fs.readFileSync(scriptPath, "utf8");
 
+            // Inject the script just before the closing </body> tag
+            // This guarantees the DOM is ready before the script runs
             html = html.replace(
               /<\/body>/i,
               `<script>${script}</script></body>`
@@ -82,6 +104,7 @@ jobs:
             global.document = dom.window.document;
             global.HTMLElement = dom.window.HTMLElement;
             
+            // Expose element IDs to the Jest 'global' context
             document.querySelectorAll("[id]").forEach(el => { if (el.id) global[el.id] = el; });
             
             return dom.window;
@@ -90,109 +113,110 @@ jobs:
           module.exports = { loadDomAndScript };
           HARNESS
 
-      - name: Create tests
-        run: |
-          cat > tests/arrays.test.cjs <<'TESTS'
-          const fs = require('fs');
-          const { loadDomAndScript } = require('./_domHarness');
+          # 5. Create the "Crash-Proof" Test File
+          cat > tests/arrays.test.js <<'TESTS'
+          const fs = require("fs");
+          const { loadDomAndScript } = require("./_domHarness");
 
-          const wait = (ms=40) => new Promise(r => setTimeout(r, ms));
+          // Test helpers
+          let checks = [];
+          const add = (name, max, pass) => checks.push({ name, max, awarded: pass ? max : 0 });
+          const text = (el) => (el && el.textContent ? el.textContent.trim() : "");
+          const click = (el) => { try { el && el.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); } catch {} };
+          const input = (el, v) => { try { if (el) { el.value = v; el.dispatchEvent(new window.Event("input", { bubbles: true })); } } catch {} };
+          const $ = (sel) => (document ? document.querySelector(sel) : null);
+          const has = (sel) => !!$(sel);
           const firstInt = s => {
             const m = String(s||'').match(/-?\d+/);
             return m ? Number(m[0]) : 0;
           };
-          
-          const $ = (sel) => (document ? document.querySelector(sel) : null);
-          const setVal = (doc, id, v) => {
-            const el = doc.getElementById(id);
-            if (!el) return false;
-            el.value = String(v);
-            return true;
-          }
 
-          describe('Unit 8.5 – Arrays (Inputs + textContent)', () => {
-            let dom, window, document;
-            let scriptCrashError = null;
+          let scriptCrashError = null;
 
-            beforeAll(async () => {
+          // Write the grade report after all tests run
+          afterAll(() => {
+            const total = checks.reduce((s, c) => s + c.awarded, 0);
+            const max = Math.max(1, checks.reduce((s, c) => s + c.max, 0));
+            const percent = Math.round((total / max) * 100);
+            fs.writeFileSync("grade-report.json", JSON.stringify({ total, max, percent, checks, scriptCrashError }, null, 2));
+            console.log(`GRADE: ${total}/${max} (${percent}%)`);
+            if (scriptCrashError) console.error("Script failed to run:", scriptCrashError);
+          });
+
+          describe("Unit 8.5 – Arrays (crash-proof)", () => {
+            beforeAll(() => {
               try {
-                const win = loadDomAndScript();
-                document = win.document;
-                window = win;
+                // This one function loads HTML and runs the script
+                loadDomAndScript();
               } catch (e) {
+                // This will catch the "giveUp.addEventListener" error
                 scriptCrashError = e.message;
-                console.error("Error loading DOM or running script.js:", e.message);
-                if (!global.document) {
-                  const dom = new JSDOM();
-                  global.document = dom.window.document;
-                  global.window = dom.window;
-                }
+                console.error("Error encountered while loading DOM or running script.js:", e.message);
               }
             });
-            
-            afterAll(() => {
-              if (scriptCrashError) {
-                console.error("Script failed to run:", scriptCrashError);
-              }
-            });
-            
-            test('required elements exist', () => {
-              if (scriptCrashError) throw new Error(`Script crashed: ${scriptCrashError}`);
+
+            test("Required HTML elements exist", () => {
               const req = ['color','n1','n2','n3','n4','n5','actionList','average','evenCount','feedback'];
-              req.forEach(id => {
-                expect(document.getElementById(id)).not.toBeNull();
-              });
-              expect(document.querySelector('button')).not.toBeNull();
+              const ok = req.every(sel => has(`#${sel}`));
+              const btn = !!$('button');
+              add("Required HTML elements exist", 30, ok && btn);
+              expect(true).toBe(true);
             });
             
-            test('global function runJS exists', () => {
-              if (scriptCrashError) throw new Error(`Script crashed: ${scriptCrashError}`);
-              expect(typeof window.runJS).toBe('function');
+            test("Global function 'runJS' exists", () => {
+               add("Global function 'runJS' exists", 10, typeof window.runJS === 'function');
+               expect(true).toBe(true);
             });
 
-            test('invalid color handled with textContent (no prints)', async () => {
-              if (scriptCrashError) throw new Error(`Script crashed: ${scriptCrashError}`);
-              setVal(document, 'color', 'blue'); // invalid
-              [1,2,3,4,5].forEach(n => setVal(document, `n${n}`, '0'));
-
-              window.runJS(); await wait();
-
-              const fb = (document.getElementById('feedback').textContent || '').toLowerCase();
-              expect(fb).toMatch(/invalid/);
-
-              const list = document.getElementById('actionList');
-              const items = Array.from(list.children || []);
-              expect(items.length).toBe(0);
+            test("Invalid color handled with textContent", () => {
+              let pass = false;
+              if (typeof window.runJS === 'function' && !scriptCrashError) {
+                try {
+                  input($("#color"), 'blue');
+                  [1,2,3,4,5].forEach(n => input($(`#n${n}`), '0'));
+                  click($('button'));
+                  
+                  const fb = text($("#feedback")).toLowerCase();
+                  const items = $("#actionList")?.children?.length || 0;
+                  pass = /invalid/.test(fb) && items === 0;
+                } catch (e) { scriptCrashError = e.message; }
+              }
+              add("Invalid color handled with textContent", 20, pass);
+              expect(true).toBe(true);
             });
 
-            test('valid color prints 5 actions in #actionList', async () => {
-              if (scriptCrashError) throw new Error(`Script crashed: ${scriptCrashError}`);
-              setVal(document, 'color', 'YELLOW'); // should map to "Slow"
-              [1,2,3,4,5].forEach(n => setVal(document, `n${n}`, '0'));
-
-              window.runJS(); await wait();
-
-              const list = document.getElementById('actionList');
-              const items = Array.from(list.children || []);
-              expect(items.length).toBeGreaterThanOrEqual(5);
-
-              const txt = (list.textContent || '').toLowerCase();
-              const slowCount = (txt.match(/slow/g) || []).length;
-              expect(slowCount).toBeGreaterThanOrEqual(5);
+            test("Valid color prints 5 actions in #actionList", () => {
+              let pass = false;
+              if (typeof window.runJS === 'function' && !scriptCrashError) {
+                try {
+                  input($("#color"), 'YELLOW');
+                  [1,2,3,4,5].forEach(n => input($(`#n${n}`), '0'));
+                  click($('button'));
+                  
+                  const txt = text($("#actionList")).toLowerCase();
+                  const slowCount = (txt.match(/slow/g) || []).length;
+                  pass = slowCount >= 5;
+                } catch (e) { scriptCrashError = e.message; }
+              }
+              add("Valid color prints 5 actions in #actionList", 20, pass);
+              expect(true).toBe(true);
             });
 
-            test('numbers array calculates average and evens', async () => {
-              if (scriptCrashError) throw new Error(`Script crashed: ${scriptCrashError}`);
-              setVal(document,'color','green');
-              ['n1','n2','n3','n4','n5'].forEach((id,i)=>setVal(document,id,[2,3,4,5,6][i]));
+            test("Numbers array calculates average and evens", () => {
+              let pass = false;
+              if (typeof window.runJS === 'function' && !scriptCrashError) {
+                try {
+                  input($("#color"), 'green');
+                  [2,3,4,5,6].forEach((v, i) => input($(`#n${i+1}`), String(v)));
+                  click($('button'));
 
-              window.runJS(); await wait();
-
-              const avgTxt = document.getElementById('average').textContent || '';
-              const evTxt  = document.getElementById('evenCount').textContent || '';
-
-              expect(firstInt(avgTxt)).toBe(4);
-              expect(firstInt(evTxt)).toBe(3);
+                  const avg = firstInt(text($("#average")));
+                  const evens = firstInt(text($("#evenCount")));
+                  pass = (avg === 4) && (evens === 3);
+                } catch (e) { scriptCrashError = e.message; }
+              }
+              add("Numbers array calculates average and evens", 20, pass);
+              expect(true).toBe(true);
             });
           });
           TESTS
@@ -208,99 +232,82 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Run Test - Required Elements
-        id: t_required
-        uses: classroom-resources/autograding-command-grader@v1
-        with:
-          test-name: "Required HTML elements exist"
-          command: "npx jest --runInBand --testNamePattern='required elements exist$'"
-          timeout: 10
-          max-score: 30
+      - name: Run Jest (produces grade-report.json)
+        id: run_jest
+        continue-on-error: true
+        run: npm test
 
-      - name: Run Test - Global Function
-        id: t_function
-        uses: classroom-resources/autograding-command-grader@v1
-        with:
-          test-name: "Global function 'runJS' exists"
-          command: "npx jest --runInBand --testNamePattern='global function runJS exists$'"
-          timeout: 10
-          max-score: 10
-
-      - name: Run Test - Invalid Color
-        id: t_invalid
-        uses: classroom-resources/autograding-command-grader@v1
-        with:
-          test-name: "Invalid color handled with textContent"
-          command: "npx jest --runInBand --testNamePattern='invalid color handled with textContent'"
-          timeout: 10
-          max-score: 20
-
-      - name: Run Test - Valid Color
-        id: t_valid
-        uses: classroom-resources/autograding-command-grader@v1
-        with:
-          test-name: "Valid color prints 5 actions in #actionList"
-          command: "npx jest --runInBand --testNamePattern='valid color prints 5 actions in #actionList$'"
-          timeout: 10
-          max-score: 20
-
-      - name: Run Test - Calculations
-        id: t_calc
-        uses: classroom-resources/autograding-command-grader@v1
-        with:
-          test-name: "Numbers array calculates average and evens"
-          command: "npx jest --runInBand --testNamePattern='numbers array calculates average and evens$'"
-          timeout: 10
-          max-score: 20
-
-      - name: Prepare reporter env
-        id: prep_env
+      - name: Debug Jest Output
         if: always()
         shell: bash
         run: |
-          echo "T_REQUIRED_RESULTS=${{ steps.t_required.outputs.result }}" >> "$GITHUB_ENV"
-          echo "T_FUNCTION_RESULTS=${{ steps.t_function.outputs.result }}" >> "$GITHUB_ENV"
-          echo "T_INVALID_RESULTS=${{ steps.t_invalid.outputs.result }}" >> "$GITHUB_ENV"
-          echo "T_VALID_RESULTS=${{ steps.t_valid.outputs.result }}" >> "$GITHUB_ENV"
-          echo "T_CALC_RESULTS=${{ steps.t_calc.outputs.result }}" >> "$GITHUB_ENV"
+          echo "---- DEBUG: Contents of grade-report.json ----"
+          if [ -f grade-report.json ]; then
+            cat grade-report.json
+          else
+            echo "grade-report.json not found."
+          fi
+          echo "---- END DEBUG ----"
+
+      # ----------------------------------------------------------------
+      # Simplified Grading
+      # ----------------------------------------------------------------
+      - name: Parse Grade Report for Reporter
+        id: parse_grade
+        if: always()
+        shell: bash
+        run: |
+          if [ ! -f grade-report.json ]; then
+            echo '{ "total": 0, "max": 100, "percent": 0, "checks": [] }' > grade-report.json
+          fi
+          # This command transforms our report into the format the reporter needs
+          jq '[.checks[] | {test_name: .name, points: .awarded, max_points: .max}]' grade-report.json > points.json
+          echo "---- DEBUG: Contents of points.json ----"
+          cat points.json
+          echo "---- END DEBUG ----"
 
       - name: Classroom Reporter
         id: reporter
         if: always()
         uses: classroom-resources/autograding-grading-reporter@v1
         with:
-          runners: 't_required,t_function,t_invalid,t_valid,t_calc'
+          # This tells the reporter to read our new JSON file
+          points: './points.json'
           token: ${{ github.token }}
 
-      # ----------------------------------------------------------------
-      # FIX: This step is rewritten to decode Base64 before parsing
-      # and build a single string with \n for newlines.
-      # ----------------------------------------------------------------
       - name: Show grade in summary
         if: always()
-        shell: bash
         run: |
-          # Helper function
-          parse_json () {
-            if [ -z "$1" ]; then
-              echo "❌ Skipped";
-              return
-            fi
-            # Use base64 -d to decode the string, then pipe to jq
-            echo "$1" | base64 -d | jq -r 'if .status == "pass" then "✅ Pass" else "❌ Fail" end'
-          }
-          # Export the function so it's available to command substitution
-          export -f parse_json
-
-          # Build a single string with \n for newlines
-          SUMMARY_CONTENT="## Unit 8.5 — Autograder Summary\n\n"
-          SUMMARY_CONTENT+="| Check | Status |\n"
-          SUMMARY_CONTENT+="|---|---|\n"
-          SUMMARY_CONTENT+="| Required Elements | $(parse_json '${{ steps.t_required.outputs.result }}') |\n"
-          SUMMARY_CONTENT+="| 'runJS' Function | $(parse_json '${{ steps.t_function.outputs.result }}') |\n"
-          SUMMARY_CONTENT+="| Invalid Color Test | $(parse_json '${{ steps.t_invalid.outputs.result }}') |\n"
-          SUMMARY_CONTENT+="| Valid Color Test | $(parse_json '${{ steps.t_valid.outputs.result }}') |\n"
-          SUMMARY_CONTENT+="| Calculations Test | $(parse_json '${{ steps.t_calc.outputs.result }}') |\n"
-          
-          # Use echo -e to print the string with newlines
-          echo -e "$SUMMARY_CONTENT" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f grade-report.json ]; then
+            TOTAL=$(jq -r '.total' grade-report.json)
+            # Re-calculate max points to be safe
+            MAX=$(jq -r '[(.checks[] | .max)] | add' grade-report.json)
+            PCT=$(jq -r '.percent' grade-report.json)
+            {
+              echo "## Unit 8.5 — Autograder Summary"
+              echo
+              echo "**Score:** $TOTAL / $MAX ($PCT%)"
+              echo
+              CRASH_MSG=$(jq -r '.scriptCrashError // ""' grade-report.json)
+              if [ -n "$CRASH_MSG" ] && [ "$CRASH_MSG" != "null" ]; then
+                echo "---"
+                echo "🚨 **Your \`script.js\` file crashed!**"
+                echo
+                echo "This is why most functional tests are failing. Fix this error:"
+                echo "\`\`\`"
+                echo "$CRASH_MSG"
+                echo "\`\`\`"
+                echo "---"
+              fi
+              echo
+              echo "| Check | Points | Max | Passed |"
+              echo "|---|---:|---:|:---:|"
+              jq -r '.checks[] |
+                "| \(.name) | \(.awarded) | \(.max) | \(if .awarded == .max then "✅" else "❌" end) |"
+              ' grade-report.json
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Grade Report Failed"
+              echo
+              echo "No grade-report.json
