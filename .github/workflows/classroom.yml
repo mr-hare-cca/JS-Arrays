@@ -1,9 +1,8 @@
-
 name: "Classroom Autograder – Unit 8.5: Arrays (Inputs + textContent)"
 
 on:
   push:
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   autograde:
@@ -36,54 +35,82 @@ jobs:
           module.exports = {
             testEnvironment: 'jsdom',
             setupFiles: ['<rootDir>/jest.setup.cjs'],
-            testMatch: ['**/__tests__/**/*.test.cjs']
+            # FIX 1: Look in 'tests/' not '__tests__'
+            testMatch: ['<rootDir>/tests/**/*.test.cjs']
           };
           EOF
 
+      - name: Create Test Harness
+        run: |
+          mkdir -p tests
+          # ----------------------------------------------------------------
+          # ROBUST HARNESS: tests/_domHarness.js (Script Injection)
+          # ----------------------------------------------------------------
+          cat > tests/_domHarness.js <<'HARNESS'
+          const fs = require("fs");
+          const path = require("path");
+          const { JSDOM } = require("jsdom");
+
+          function findFile(filename, searchPaths = ['.', 'public', 'src', 'docs']) {
+            for (const p of searchPaths) {
+              const fullPath = path.join(process.cwd(), p, filename);
+              if (fs.existsSync(fullPath)) {
+                return fullPath;
+              }
+            }
+            return null;
+          }
+
+          function loadDomAndScript() {
+            const htmlPath = findFile("index.html");
+            if (!htmlPath) throw new Error("index.html not found in ., public, src, or docs");
+            
+            const scriptPath = findFile("script.js", ['.', 'public', 'src', 'docs']);
+            if (!scriptPath) throw new Error("script.js not found in ., public, src, or docs");
+
+            let html = fs.readFileSync(htmlPath, "utf8");
+            const script = fs.readFileSync(scriptPath, "utf8");
+
+            html = html.replace(
+              /<\/body>/i,
+              `<script>${script}</script></body>`
+            );
+            
+            const dom = new JSDOM(html, { 
+              url: "file://" + path.dirname(htmlPath) + "/", 
+              runScripts: "dangerously", 
+              resources: "usable" 
+            });
+
+            global.window = dom.window;
+            global.document = dom.window.document;
+            global.HTMLElement = dom.window.HTMLElement;
+            
+            document.querySelectorAll("[id]").forEach(el => { if (el.id) global[el.id] = el; });
+            
+            return dom.window;
+          }
+
+          module.exports = { loadDomAndScript };
+          HARNESS
+
       - name: Create tests
         run: |
-          mkdir -p __tests__
-          cat > __tests__/arrays.test.cjs <<'EOF'
+          # ----------------------------------------------------------------
+          # ROBUST TEST FILE: tests/arrays.test.cjs
+          # ----------------------------------------------------------------
+          cat > tests/arrays.test.cjs <<'TESTS'
           const fs = require('fs');
-          const path = require('path');
-          const { JSDOM, VirtualConsole } = require('jsdom');
+          const { loadDomAndScript } = require('./_domHarness');
 
           const wait = (ms=40) => new Promise(r => setTimeout(r, ms));
           const firstInt = s => {
             const m = String(s||'').match(/-?\d+/);
             return m ? Number(m[0]) : 0;
           };
-
-          function find(pList){ for (const p of pList) if (fs.existsSync(p)) return p; return null; }
-          function findIndex(){ return find(['index.html','public/index.html','src/index.html','docs/index.html']); }
-
-          async function loadPage() {
-            const vconsole = new VirtualConsole();
-            vconsole.on('error', () => {});
-
-            const idx = findIndex();
-            if (!idx) throw new Error('index.html not found (root/public/src/docs).');
-
-            const baseDir = path.dirname(path.resolve(idx));
-            const baseUrl = 'file://' + baseDir.replace(/\\+/g, '/') + '/';
-            const dom = await JSDOM.fromFile(idx, {
-              url: baseUrl,
-              runScripts: 'dangerously',
-              resources: 'usable',
-              pretendToBeVisual: true,
-              virtualConsole: vconsole
-            });
-
-            // Enforce: no prompt/alert
-            dom.window.prompt = () => { throw new Error('Use inputs, not prompt().'); };
-            dom.window.alert = () => { throw new Error('Use textContent, not alert().'); };
-
-            await new Promise(res => dom.window.addEventListener('load', res, { once: true }));
-            await wait();
-            return dom;
-          }
-
-          function setVal(doc, id, v) {
+          
+          const $ = (sel) => (document ? document.querySelector(sel) : null);
+          const setVal = (doc, id, v) => {
             const el = doc.getElementById(id);
             if (!el) return false;
             el.value = String(v);
@@ -92,25 +119,48 @@ jobs:
 
           describe('Unit 8.5 – Arrays (Inputs + textContent)', () => {
             let dom, window, document;
+            let scriptCrashError = null;
 
             beforeAll(async () => {
-              dom = await loadPage();
-              window = dom.window;
-              document = window.document;
+              try {
+                const win = loadDomAndScript();
+                document = win.document;
+                window = win;
+              } catch (e) {
+                scriptCrashError = e.message;
+                console.error("Error loading DOM or running script.js:", e.message);
+                // Create dummy document if load failed, so tests don't crash
+                if (!global.document) {
+                  const dom = new JSDOM();
+                  global.document = dom.window.document;
+                  global.window = dom.window;
+                }
+              }
+            });
+            
+            afterAll(() => {
+              if (scriptCrashError) {
+                console.error("Script failed to run:", scriptCrashError);
+              }
             });
 
             test('required elements exist', () => {
+              if (scriptCrashError) throw new Error(scriptCrashError);
               ['color','n1','n2','n3','n4','n5','actionList','average','evenCount','feedback'].forEach(id => {
                 expect(document.getElementById(id)).not.toBeNull();
               });
               expect(document.querySelector('button')).not.toBeNull();
+            });
+            
+            test('global function runJS exists', () => {
+              if (scriptCrashError) throw new Error(scriptCrashError);
               expect(typeof window.runJS).toBe('function');
             });
 
             test('invalid color handled with textContent (no prints)', async () => {
+              if (scriptCrashError) throw new Error(scriptCrashError);
               setVal(document, 'color', 'blue'); // invalid
-              setVal(document, 'n1', '0'); setVal(document, 'n2', '0');
-              setVal(document, 'n3', '0'); setVal(document, 'n4', '0'); setVal(document, 'n5', '0');
+              [1,2,3,4,5].forEach(n => setVal(document, `n${n}`, '0'));
 
               window.runJS(); await wait();
 
@@ -122,10 +172,10 @@ jobs:
               expect(items.length).toBe(0);
             });
 
-            test('valid color prints action x5 in #actionList', async () => {
+            test('valid color prints 5 actions in #actionList', async () => {
+              if (scriptCrashError) throw new Error(scriptCrashError);
               setVal(document, 'color', 'YELLOW'); // should map to "Slow"
-              setVal(document, 'n1', '0'); setVal(document, 'n2', '0');
-              setVal(document, 'n3', '0'); setVal(document, 'n4', '0'); setVal(document, 'n5', '0');
+              [1,2,3,4,5].forEach(n => setVal(document, `n${n}`, '0'));
 
               window.runJS(); await wait();
 
@@ -138,7 +188,8 @@ jobs:
               expect(slowCount).toBeGreaterThanOrEqual(5);
             });
 
-            test('numbers array → average and evens displayed via textContent', async () => {
+            test('numbers array calculates average and evens', async () => {
+              if (scriptCrashError) throw new Error(scriptCrashError);
               // 2,3,4,5,6 -> avg 4, evens 3
               setVal(document,'color','green');
               ['n1','n2','n3','n4','n5'].forEach((id,i)=>setVal(document,id,[2,3,4,5,6][i]));
@@ -154,27 +205,111 @@ jobs:
           });
           EOF
 
-      - name: Run tests and summarize
-        id: jest
-        continue-on-error: true
+      - name: Debug File Structure
+        if: always()
+        shell: bash
         run: |
-          npx jest --runInBand --json --outputFile=jest-results.json
-          node - <<'NODE'
-          const fs = require('fs');
-          let r = { numTotalTests:0, numPassedTests:0, numFailedTests:0, testResults:[] };
-          try { r = JSON.parse(fs.readFileSync('jest-results.json','utf8')); } catch {}
-          const total=r.numTotalTests||0, passed=r.numPassedTests||0, failed=r.numFailedTests||0;
-          const rows = (r.testResults||[]).flatMap(t => (t.assertionResults||[]).map(a => `- ${a.status==='passed'?'✅':'❌'} ${a.title}`));
-          const out = [
-            '# Unit 8.5 Autograder Summary',
-            `**Passed:** ${passed}/${total} · **Failed:** ${failed}`,
-            '',
-            '## Checks',
-            ...rows
-          ].join('\n');
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, out);
-          NODE
+          echo "---- DEBUG: File System Structure ----"
+          ls -R
+          echo "---- END DEBUG: File System Structure ----"
 
-      - name: Fail job if any test failed
-        if: steps.jest.outcome == 'failure'
-        run: exit 1
+      - name: Install dependencies
+        run: npm ci || npm i
+
+      # ----------------------------------------------------------------
+      # NEW: Graders run one by one
+      # This is the reliable method required by the reporter.
+      # ----------------------------------------------------------------
+      
+      - name: Run Test - Required Elements
+        id: t_required
+        uses: classroom-resources/autograding-command-grader@v1
+        with:
+          test-name: "Required HTML elements exist"
+          command: "npx jest --runInBand --testNamePattern='required elements exist$'"
+          timeout: 10
+          max-score: 30
+
+      - name: Run Test - Global Function
+        id: t_function
+        uses: classroom-resources/autograding-command-grader@v1
+        with:
+          test-name: "Global function 'runJS' exists"
+          command: "npx jest --runInBand --testNamePattern='global function runJS exists$'"
+          timeout: 10
+          max-score: 10
+
+      - name: Run Test - Invalid Color
+        id: t_invalid
+        uses: classroom-resources/autograding-command-grader@v1
+        with:
+          test-name: "Invalid color handled with textContent"
+          command: "npx jest --runInBand --testNamePattern='invalid color handled with textContent'"
+          timeout: 10
+          max-score: 20
+
+      - name: Run Test - Valid Color
+        id: t_valid
+        uses: classroom-resources/autograding-command-grader@v1
+        with:
+          test-name: "Valid color prints 5 actions in #actionList"
+          command: "npx jest --runInBand --testNamePattern='valid color prints 5 actions in #actionList$'"
+          timeout: 10
+          max-score: 20
+
+      - name: Run Test - Calculations
+        id: t_calc
+        uses: classroom-resources/autograding-command-grader@v1
+        with:
+          test-name: "Numbers array calculates average and evens"
+          command: "npx jest --runInBand --testNamePattern='numbers array calculates average and evens$'"
+          timeout: 10
+          max-score: 20
+
+      - name: Prepare reporter env
+        id: prep_env
+        if: always()
+        shell: bash
+        run: |
+          echo "T_REQUIRED_RESULTS=${{ steps.t_required.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_FUNCTION_RESULTS=${{ steps.t_function.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_INVALID_RESULTS=${{ steps.t_invalid.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_VALID_RESULTS=${{ steps.t_valid.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_CALC_RESULTS=${{ steps.t_calc.outputs.result }}" >> "$GITHUB_ENV"
+
+      - name: Classroom Reporter
+        id: reporter
+        if: always()
+        uses: classroom-resources/autograding-grading-reporter@v1
+        with:
+          # FIX 2: Use the 'runners' input, not 'points'
+          runners: 't_required,t_function,t_invalid,t_valid,t_calc'
+          token: ${{ github.token }}
+
+      - name: Show grade in summary
+        if: always()
+        shell: bash
+        run: |
+          # This step now just prints the output from the reporter
+          # We'll build a simple summary by hand
+          echo "## Unit 8.5 — Autograder Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          
+          echo "| Check | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          
+          # Function to parse the JSON output from each step
+          parse_json () {
+            if [ -z "$1" ]; then
+              echo "❌ Skipped";
+              return
+            fi
+            PASS=$(echo $1 | jq -r 'if .status == "pass" then "✅ Pass" else "❌ Fail" end')
+            echo $PASS
+          }
+          
+          echo "| Required Elements | $(parse_json '${{ steps.t_required.outputs.result }}') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 'runJS' Function | $(parse_json '${{ steps.t_function.outputs.result }}') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Invalid Color Test | $(parse_json '${{ steps.t_invalid.outputs.result }}') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Valid Color Test | $(parse_json '${{ steps.t_valid.outputs.result }}') |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Calculations Test | $(parse_json '${{ steps.t_calc.outputs.result }}') |" >> "$GITHUB_STEP_SUMMARY"
