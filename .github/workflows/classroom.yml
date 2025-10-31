@@ -1,150 +1,151 @@
-# classroom.yml
-# Config file for Unit 8.5 – Arrays (Inputs + textContent)
-# This harness assumes your page updates ONLY via textContent (no alerts/prompts/innerHTML).
+name: Unit 8.5 Autograding (Prompts + console.log)
 
-# Function the harness calls on each test run
-run: runJS()
+on:
+  push:
+  workflow_dispatch:
 
-# Global guardrails (aligned to the README)
-noAlert: true
-noPrompt: true
-# noConsole: true   # Uncomment if you want to forbid console.log for this assignment
+jobs:
+  autograde:
+    runs-on: ubuntu-latest
 
-# Notes for students (self-documenting tests)
-# - Valid colors (case/space-insensitive): "green" => "Go", "yellow" => "Slow", "red" => "Stop"
-# - Exactly 5 actions should render as list items under #actionList (use <li> recommended)
-# - Average should be a plain numeric string (e.g., "3" or "8.8")
-# - #feedback must be empty on valid colors; show a message for invalid colors
-# - Count evens using standard math rules (0 is even)
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v4
 
-tests:
+      - name: Setup Node
+        id: setup_node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-  # ────────────────────────────────────────────────────────────
-  # Sanity + GREEN flow
-  # ────────────────────────────────────────────────────────────
-  - name: "GREEN: 'green' + (1,2,3,4,5) → five 'Go', avg=3, evens=2"
-    inputs:
-      "#color": "green"
-      "#n1": 1
-      "#n2": 2
-      "#n3": 3
-      "#n4": 4
-      "#n5": 5
-    outputs:
-      # Exactly 5 actions and all are "Go"
-      count: { selector: "#actionList li", text: "Go", value: 5 }
-      matches:
-        # Also verify the list length is exactly 5 regardless of text
-        - { selector: "#actionList li:nth-child(5)", text: "Go" }
-        # Average: (1+2+3+4+5)/5 = 3
-        - { selector: "#average", text: "3" }
-        # Evens: (2,4) = 2
-        - { selector: "#evenCount", text: "2" }
-        # No feedback for valid color
-        - { selector: "#feedback", text: "" }
+      # Remove any legacy test harnesses or configs
+      - name: Cleanup old harnesses
+        run: |
+          rm -rf __tests__ jest.config.cjs jest.setup.cjs
+          find . -maxdepth 2 -type f -name "*arrays.test.cjs" -delete || true
 
-  # ────────────────────────────────────────────────────────────
-  # RED in uppercase (case-insensitivity) + all even numbers
-  # ────────────────────────────────────────────────────────────
-  - name: "RED: 'RED' (case-insensitive), all even → five 'Stop', avg=8.8, evens=5"
-    inputs:
-      "#color": "RED"  # case-insensitivity required
-      "#n1": 10
-      "#n2": 20
-      "#n3": 2
-      "#n4": 4
-      "#n5": 8
-    outputs:
-      count: { selector: "#actionList li", text: "Stop", value: 5 }
-      matches:
-        # Average: (10+20+2+4+8)/5 = 44/5 = 8.8
-        - { selector: "#average", text: "8.8" }
-        # Evens: all five
-        - { selector: "#evenCount", text: "5" }
-        # No feedback for valid color
-        - { selector: "#feedback", text: "" }
+      # Build a local test environment
+      - name: Bootstrap Jest test harness
+        id: write_tests
+        shell: bash
+        run: |
+          mkdir -p tests
 
-  # ────────────────────────────────────────────────────────────
-  # YELLOW flow, includes zero (0 is even)
-  # ────────────────────────────────────────────────────────────
-  - name: "YELLOW: 'Yellow' + (1,3,5,7,0) → five 'Slow', avg=3.2, evens=1"
-    inputs:
-      "#color": "Yellow"
-      "#n1": 1
-      "#n2": 3
-      "#n3": 5
-      "#n4": 7
-      "#n5": 0  # 0 is even
-    outputs:
-      count: { selector: "#actionList li", text: "Slow", value: 5 }
-      matches:
-        # Average: (1+3+5+7+0)/5 = 16/5 = 3.2
-        - { selector: "#average", text: "3.2" }
-        # Evens: (0) only
-        - { selector: "#evenCount", text: "1" }
-        - { selector: "#feedback", text: "" }
+          # package.json
+          cat > package.json <<'PKG'
+          {
+            "name": "unit-8-5-prompts-consolelog",
+            "version": "1.0.0",
+            "private": true,
+            "scripts": {
+              "test": "jest --runInBand --reporters=default"
+            },
+            "devDependencies": {
+              "jest": "^29.7.0",
+              "jest-environment-node": "^29.7.0"
+            }
+          }
+          PKG
 
-  # ────────────────────────────────────────────────────────────
-  # Invalid color path: must NOT render actions; still compute numbers
-  # ────────────────────────────────────────────────────────────
-  - name: "INVALID: 'blue' → no actions; feedback shown; average/evens still computed"
-    inputs:
-      "#color": "blue"
-      "#n1": 1
-      "#n2": 1
-      "#n3": 1
-      "#n4": 1
-      "#n5": 1
-    outputs:
-      # No actions for invalid color
-      count: { selector: "#actionList li", value: 0 }
-      # Some message must appear (any non-empty text)
-      not: { selector: "#feedback", text: "" }
-      matches:
-        # Average still calculated: 1
-        - { selector: "#average", text: "1" }
-        # Evens among five 1s: 0
-        - { selector: "#evenCount", text: "0" }
+          # jest.config.js (Node env; ignore legacy __tests__/)
+          cat > jest.config.js <<'JEST'
+          export default {
+            testEnvironment: "node",
+            testMatch: ["**/tests/**/*.test.cjs"],
+            testPathIgnorePatterns: ["/node_modules/", "/__tests__/"]
+          };
+          JEST
 
-  # ────────────────────────────────────────────────────────────
-  # Whitespace + case robustness; list must reset between runs
-  # (Use inputs that produce an integer average to avoid formatting ambiguity.)
-  # ────────────────────────────────────────────────────────────
-  - name: "ROBUSTNESS: '  YeLLoW  ' (spaces/mixed case) resets list; avg=10; evens=3"
-    inputs:
-      "#color": "  YeLLoW  "   # should trim + normalize
-      "#n1": 10
-      "#n2": 10
-      "#n3": 10
-      "#n4": 10
-      "#n5": 10
-    outputs:
-      # Must be exactly 5 fresh items, all 'Slow'
-      count: { selector: "#actionList li", text: "Slow", value: 5 }
-      matches:
-        # Average: 10
-        - { selector: "#average", text: "10" }
-        # Evens: 5 numbers are even → 5 (keep requirement at 3? If you require 3, change inputs)
-        - { selector: "#evenCount", text: "5" }
-        - { selector: "#feedback", text: "" }
+          # tests/script.test.cjs (CommonJS)
+          cat > tests/script.test.cjs <<'TEST'
+          const fs = require("node:fs");
+          const vm = require("node:vm");
+          const path = require("node:path");
 
-  # ────────────────────────────────────────────────────────────
-  # Mixed signs and odd/even combo including negatives
-  # Ensures evenness uses %2 === 0 logic, not string tricks.
-  # ────────────────────────────────────────────────────────────
-  - name: "MIXED NUMBERS: 'Green' + (-2,-1,0,1,2) → five 'Go', avg=0, evens=3"
-    inputs:
-      "#color": "Green"
-      "#n1": -2
-      "#n2": -1
-      "#n3": 0
-      "#n4": 1
-      "#n5": 2
-    outputs:
-      count: { selector: "#actionList li", text: "Go", value: 5 }
-      matches:
-        # Average: (-2 + -1 + 0 + 1 + 2) / 5 = 0
-        - { selector: "#average", text: "0" }
-        # Evens: -2, 0, 2 → 3
-        - { selector: "#evenCount", text: "3" }
-        - { selector: "#feedback", text: "" }
+          const loadStudent = (answers) => {
+            const codePath = path.resolve("script.js");
+            const code = fs.readFileSync(codePath, "utf8");
+            const logs = [];
+            const sandbox = {
+              console: { log: (...args) => logs.push(args.map(String).join(" ")) },
+              prompt: (() => {
+                const queue = [...answers];
+                return () => String(queue.shift() ?? "");
+              })(),
+            };
+            vm.createContext(sandbox);
+            const script = new vm.Script(code, { filename: "script.js" });
+            script.runInContext(sandbox);
+            return { logs, code };
+          };
+
+          const countOccurrences = (arr, needle) =>
+            arr.reduce((acc, line) => acc + (line.trim() === needle ? 1 : 0), 0);
+
+          test("REQUIRED: valid color prints correct action five times; average and evens correct", () => {
+            const { logs } = loadStudent(["green", "1", "2", "3", "4", "5"]);
+            const goCount = countOccurrences(logs, "Action: Go");
+            expect(goCount).toBeGreaterThanOrEqual(5);
+            expect(logs.find(l => /Invalid color/i.test(l))).toBeUndefined();
+
+            const avgLine = logs.find(l => /^Average:\s*-?\d+(?:\.\d+)?$/.test(l.trim()));
+            expect(avgLine).toBeDefined();
+            const avgValue = Number(avgLine.split(":")[1].trim());
+            expect(avgValue).toBeCloseTo(3, 6);
+
+            const evenLine = logs.find(l => /^Even count:\s*\d+$/.test(l.trim()));
+            expect(evenLine).toBeDefined();
+            const evenVal = Number(evenLine.split(":")[1].trim());
+            expect(evenVal).toBe(2);
+          });
+
+          test("INVALID_COLOR: prints 'Invalid color' and does not print five actions", () => {
+            const { logs } = loadStudent(["blue", "10", "20", "30", "40", "50"]);
+            const invalid = logs.find(l => /^Invalid color$/i.test(l.trim()));
+            expect(invalid).toBeDefined();
+
+            const totalActions = logs.filter(l => /^Action:/.test(l.trim())).length;
+            expect(totalActions).toBeLessThan(5);
+          });
+
+          test("NO_FUNCTIONS: no function or arrow syntax used", () => {
+            const { code } = loadStudent(["red", "1", "2", "3", "4", "5"]);
+            expect(/\bfunction\b/.test(code) || /=>/.test(code)).toBe(false);
+          });
+          TEST
+
+      # Install deps with clean lockfile
+      - name: Install dependencies
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
+
+      # Run all three Jest buckets separately to produce JSON results
+      - name: Run Jest test groups
+        id: run_jest
+        shell: bash
+        run: |
+          set -e
+          npm test -- --runInBand --reporters=default --testNamePattern "REQUIRED" --json --outputFile REQUIRED.json
+          npm test -- --runInBand --reporters=default --testNamePattern "INVALID_COLOR" --json --outputFile INVALID_COLOR.json
+          npm test -- --runInBand --reporters=default --testNamePattern "NO_FUNCTIONS" --json --outputFile NO_FUNCTIONS.json
+
+      # Prepare reporter env (names must match "T_<ID_UPPERCASE>_RESULTS" exactly)
+      - name: Collect JSON results
+        id: collect_results
+        run: |
+          echo "T_REQUIRED_RESULTS=$(cat REQUIRED.json)" >> $GITHUB_ENV
+          echo "T_INVALID_COLOR_RESULTS=$(cat INVALID_COLOR.json)" >> $GITHUB_ENV
+          echo "T_NO_FUNCTIONS_RESULTS=$(cat NO_FUNCTIONS.json)" >> $GITHUB_ENV
+
+      # Grade report (use autograding-grading-reporter)
+      - name: Report Grades to GitHub Classroom
+        id: report
+        uses: classroom-resources/autograding-grading-reporter@v1
+        env:
+          T_REQUIRED_RESULTS: ${{ env.T_REQUIRED_RESULTS }}
+          T_INVALID_COLOR_RESULTS: ${{ env.T_INVALID_COLOR_RESULTS }}
+          T_NO_FUNCTIONS_RESULTS: ${{ env.T_NO_FUNCTIONS_RESULTS }}
+        with:
+          runners: required,invalid_color,no_functions
