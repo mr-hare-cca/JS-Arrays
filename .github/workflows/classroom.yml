@@ -152,4 +152,4 @@ jobs:
           T_INVALID_COLOR_RESULTS: ${{ env.T_INVALID_COLOR_RESULTS }}
           T_NO_FUNCTIONS_RESULTS: ${{ env.T_NO_FUNCTIONS_RESULTS }}
         with:
-          runners: required,invalid_color,no_functions
+          runners: 't_required,t_invalid_color,t_no_functions'
