@@ -19,12 +19,12 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Purge any legacy DOM test harness
+      # Remove any legacy DOM/JSDOM harness so it can’t re-create __tests__
+      - name: Purge legacy DOM harness
         id: purge_legacy
         shell: bash
         run: |
           rm -rf __tests__ jest.config.cjs jest.setup.cjs
-          # also remove any other legacy jsdom harness injected by older workflows
           find . -maxdepth 2 -type f -name "*arrays.test.cjs" -delete || true
 
       - name: Bootstrap prompt+consolelog test harness
@@ -33,13 +33,12 @@ jobs:
         run: |
           mkdir -p tests
 
-          # package.json
+          # package.json — plain Jest, Node env
           cat > package.json <<'PKG'
           {
             "name": "unit-8-5-prompts-consolelog",
             "version": "1.0.0",
             "private": true,
-            "type": "module",
             "scripts": {
               "test": "jest --runInBand --reporters=default"
             },
@@ -50,20 +49,20 @@ jobs:
           }
           PKG
 
-          # jest.config.js (Node env; ignore legacy __tests__/)
+          # jest.config.js — CommonJS tests; ignore any legacy __tests__/
           cat > jest.config.js <<'JEST'
           export default {
             testEnvironment: "node",
-            testMatch: ["**/tests/**/*.test.js"],
+            testMatch: ["**/tests/**/*.test.cjs"],
             testPathIgnorePatterns: ["/node_modules/", "/__tests__/"]
           };
           JEST
 
-          # tests/script.test.js
-          cat > tests/script.test.js <<'TEST'
-          import fs from "node:fs";
-          import vm from "node:vm";
-          import path from "node:path";
+          # tests/script.test.cjs — **CommonJS** so Jest won’t throw ESM parse errors
+          cat > tests/script.test.cjs <<'TEST'
+          const fs = require("node:fs");
+          const vm = require("node:vm");
+          const path = require("node:path");
 
           const loadStudent = (answers) => {
             const codePath = path.resolve("script.js");
@@ -151,7 +150,4 @@ jobs:
           T_INVALID_COLOR_RESULTS: ${{ env.T_INVALID_COLOR_RESULTS }}
           T_NO_FUNCTIONS_RESULTS: ${{ env.T_NO_FUNCTIONS_RESULTS }}
         with:
-          runners: |
-            required
-            invalid_color
-            no_functions
+          runners: 'required,invalid_color,no_functions'
