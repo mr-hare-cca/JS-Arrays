@@ -213,25 +213,53 @@ jobs:
           timeout: 60
           max-score: 15
 
-      # Build & publish combined summary (console + Summary tab)
+      # === MOVED AND FIXED ===
+      # Prepare reporter env (MOVED UP)
+      - name: Prepare reporter env
+        id: prepEnv
+        shell: bash
+        run: |
+          echo "T_GREEN_ACTION_RESULTS=${{ steps.t_green_action.outputs.result }}"        >> "$GITHUB_ENV"
+          echo "T_YELLOW_ACTION_RESULTS=${{ steps.t_yellow_action.outputs.result }}"      >> "$GITHUB_ENV"
+          echo "T_RED_ACTION_RESULTS=${{ steps.t_red_action.outputs.result }}"            >> "$GITHUB_ENV"
+          echo "T_INVALID_COLOR_RESULTS=${{ steps.t_invalid_color.outputs.result }}"    >> "$GITHUB_ENV"
+          echo "T_AVG_EVEN_RESULTS=${{ steps.t_avg_even.outputs.result }}"                >> "$GITHUB_ENV"
+          echo "T_ARRAY_USAGE_RESULTS=${{ steps.t_array_usage.outputs.result }}"          >> "$GITHUB_ENV"
+
+      # Build & publish combined summary (FIXED)
       - name: Build & publish combined summary
         shell: bash
         run: |
-          npx jest --runInBand --json --outputFile=jest-summary.json || true
           node - <<'NODE'
           const fs = require("fs");
-          let jr = {};
-          try { jr = JSON.parse(fs.readFileSync("jest-summary.json","utf8")); } catch {}
-          const assertions = (jr.testResults||[]).flatMap(t => t.assertionResults || []);
 
-          const wanted = [
-            "green action lines",
-            "yellow action lines",
-            "red action lines",
-            "invalid color message",
-            "average and even count are correct",
-            "script uses array for numbers"
+          const resultKeys = [
+            'T_GREEN_ACTION_RESULTS',
+            'T_YELLOW_ACTION_RESULTS',
+            'T_RED_ACTION_RESULTS',
+            'T_INVALID_COLOR_RESULTS',
+            'T_AVG_EVEN_RESULTS',
+            'T_ARRAY_USAGE_RESULTS'
           ];
+
+          const results = [];
+          for (const key of resultKeys) {
+            try {
+              const resultJSON = process.env[key];
+              if (resultJSON) {
+                results.push(JSON.parse(resultJSON));
+              } else {
+                console.error(`Warning: Environment variable ${key} not found.`);
+              }
+            } catch (e) {
+              console.error(`Could not parse result for ${key}:`, e, process.env[key]);
+            }
+          }
+
+          let totalEarned = 0;
+          let totalPossible = 0;
+          const lines = ["# Unit 8.5 Autograder Summary"];
+          const detailLines = [];
 
           const weights = {
             "green action lines": 15,
@@ -241,43 +269,33 @@ jobs:
             "average and even count are correct": 30,
             "script uses array for numbers": 15
           };
+          const actualTotalPossible = Object.values(weights).reduce((a,b) => a+b, 0);
 
-          const status = {};
-          for (const name of wanted) {
-            const a = assertions.find(x => x.title === name);
-            status[name] = !!a && a.status === "passed";
+          for (const res of results) {
+            const name = res['test-name'] || 'Unknown Test';
+            const earned = res['points-earned'] || 0;
+            const possible = res['points-possible'] || 0;
+            const status = (res.status === 'success') ? '✅' : '❌';
+            
+            totalEarned += earned;
+            // Use the pre-defined weight as the 'possible' score for consistency
+            const displayPossible = weights[name] || possible; 
+            totalPossible += displayPossible;
+            
+            detailLines.push(`${status} ${name} (${earned}/${displayPossible} pts)`);
           }
+          
+          // Ensure the total possible matches the sum of weights
+          const displayTotal = totalPossible === actualTotalPossible ? totalPossible : actualTotalPossible;
 
-          const earned = Object.entries(weights).reduce(
-            (sum, [k, pts]) => sum + (status[k] ? pts : 0),
-            0
-          );
-          const total = Object.values(weights).reduce((a,b)=>a+b,0);
+          lines.push(`**Score: ${totalEarned}/${displayTotal}**`, "");
+          lines.push(...detailLines);
 
-          const lines = [];
-          lines.push("# Unit 8.5 Autograder Summary");
-          lines.push(`**Score: ${earned}/${total}**`, "");
-          for (const name of wanted) {
-            const weight = weights[name] || 0;
-            lines.push(`${status[name] ? "✅" : "❌"} ${name} (${weight} pts)`);
-          }
           console.log(lines.join("\n"));
 
           const summaryPath = process.env.GITHUB_STEP_SUMMARY;
           if (summaryPath) fs.appendFileSync(summaryPath, lines.join("\n") + "\n");
           NODE
-
-      # Prepare reporter env
-      - name: Prepare reporter env
-        id: prepEnv
-        shell: bash
-        run: |
-          echo "T_GREEN_ACTION_RESULTS=${{ steps.t_green_action.outputs.result }}"       >> "$GITHUB_ENV"
-          echo "T_YELLOW_ACTION_RESULTS=${{ steps.t_yellow_action.outputs.result }}"     >> "$GITHUB_ENV"
-          echo "T_RED_ACTION_RESULTS=${{ steps.t_red_action.outputs.result }}"           >> "$GITHUB_ENV"
-          echo "T_INVALID_COLOR_RESULTS=${{ steps.t_invalid_color.outputs.result }}"     >> "$GITHUB_ENV"
-          echo "T_AVG_EVEN_RESULTS=${{ steps.t_avg_even.outputs.result }}"               >> "$GITHUB_ENV"
-          echo "T_ARRAY_USAGE_RESULTS=${{ steps.t_array_usage.outputs.result }}"         >> "$GITHUB_ENV"
 
       # Report to Classroom
       - name: Report grades
