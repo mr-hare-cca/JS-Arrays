@@ -15,11 +15,11 @@ if (color === "red") {
   console.log("Invalid color");
 }
 
-if (action) {
-  for (let i = 0; i < 5; i++) {
-    console.log(action);
-  }
-}
+// if (action) {
+//   for (let i = 0; i < 5; i++) {
+//     console.log(action);
+//   }
+// }
 
 // 2) Ask for five numbers, store in an array, print average and even count
 const nums = [];
@@ -40,5 +40,5 @@ for (let i = 0; i < nums.length; i++) {
 }
 
 const average = sum / nums.length;
-console.log("Average: " + average);
-console.log("Even count: " + evenCount);
+// console.log("Average: " + average);
+// console.log("Even count: " + evenCount);
