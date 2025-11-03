@@ -59,7 +59,9 @@ jobs:
             });
 
             const logs = [];
-            console.log = (...args) => logs.push(args.join(' '));
+            console.log = (...args) => {
+              logs.push(args.join(' '));
+            };
 
             delete require.cache[scriptPath];
             try {
@@ -115,7 +117,9 @@ jobs:
             test('invalid color message', () => {
               const logs = runWithPrompts(['blue', 1, 2, 3, 4, 5]);
               const lower = logs.map(l => l.trim().toLowerCase());
-              expect(lower).toContain('invalid color');
+              const invalidLines = lower.filter(l => l === 'invalid color');
+              expect(invalidLines.length).toBeGreaterThanOrEqual(1);
+
               const actionLines = logs.filter(l => l.startsWith('Action:'));
               expect(actionLines.length).toBe(0);
             });
@@ -209,79 +213,103 @@ jobs:
           timeout: 60
           max-score: 15
 
-      # === Combined summary using step outputs (no dynamic expressions) ===
+      # === Build & publish combined summary (FIXED) ===
+      # This step reads the 'result' output from all previous steps
+      # and builds the summary with Base64 decoding.
+      # This replaces the 'Prepare reporter env' step.
       - name: Build & publish combined summary
         shell: bash
+        env:
+          T_GREEN_ACTION_RESULTS: ${{ steps.t_green_action.outputs.result }}
+          T_YELLOW_ACTION_RESULTS: ${{ steps.t_yellow_action.outputs.result }}
+          T_RED_ACTION_RESULTS: ${{ steps.t_red_action.outputs.result }}
+          T_INVALID_COLOR_RESULTS: ${{ steps.t_invalid_color.outputs.result }}
+          T_AVG_EVEN_RESULTS: ${{ steps.t_avg_even.outputs.result }}
+          T_ARRAY_USAGE_RESULTS: ${{ steps.t_array_usage.outputs.result }}
         run: |
-          summary="$GITHUB_STEP_SUMMARY"
-          echo "# Unit 8.5 Autograder Summary" >> "$summary"
-          total=100
-          earned=0
+          node - <<'NODE'
+          const fs = require("fs");
 
-          # green action lines (15)
-          if [[ "${{ steps.t_green_action.outputs.result }}" == *"pass"* ]]; then
-            earned=$((earned + 15))
-            echo "✅ green action lines (15 pts)" >> "$summary"
-          else
-            echo "❌ green action lines (15 pts)" >> "$summary"
-          fi
+          // These are the canonical test names and their weights
+          const weights = {
+            "green action lines": 15,
+            "yellow action lines": 15,
+            "red action lines": 15,
+            "invalid color message": 10,
+            "average and even count are correct": 30,
+            "script uses array for numbers": 15
+          };
+          const totalPossible = Object.values(weights).reduce((a, b) => a + b, 0);
 
-          # yellow action lines (15)
-          if [[ "${{ steps.t_yellow_action.outputs.result }}" == *"pass"* ]]; then
-            earned=$((earned + 15))
-            echo "✅ yellow action lines (15 pts)" >> "$summary"
-          else
-            echo "❌ yellow action lines (15 pts)" >> "$summary"
-          fi
+          // These are the env vars we just defined in the 'env:' block
+          const resultKeys = [
+            'T_GREEN_ACTION_RESULTS',
+            'T_YELLOW_ACTION_RESULTS',
+            'T_RED_ACTION_RESULTS',
+            'T_INVALID_COLOR_RESULTS',
+            'T_AVG_EVEN_RESULTS',
+            'T_ARRAY_USAGE_RESULTS'
+          ];
 
-          # red action lines (15)
-          if [[ "${{ steps.t_red_action.outputs.result }}" == *"pass"* ]]; then
-            earned=$((earned + 15))
-            echo "✅ red action lines (15 pts)" >> "$summary"
-          else
-            echo "❌ red action lines (15 pts)" >> "$summary"
-          fi
+          // Parse all the JSON results from the env vars
+          const results = [];
+          for (const key of resultKeys) {
+            try {
+              const base64JSON = process.env[key]; // This is Base64 text
+              
+              // Check if string is present and not empty
+              if (base64JSON && base64JSON.length > 0) {
+                
+                // 1. Decode the Base64 string into a plain UTF-8 string
+                const decodedJSON = Buffer.from(base64JSON, 'base64').toString('utf8');
+                
+                // 2. Parse the plain string as JSON
+                results.push(JSON.parse(decodedJSON));
 
-          # invalid color message (10)
-          if [[ "${{ steps.t_invalid_color.outputs.result }}" == *"pass"* ]]; then
-            earned=$((earned + 10))
-            echo "✅ invalid color message (10 pts)" >> "$summary"
-          else
-            echo "❌ invalid color message (10 pts)" >> "$summary"
-          fi
+              }
+            } catch (e) {
+              console.error(`Could not parse result for ${key}:`, e, process.env[key]);
+            }
+          }
 
-          # average and even count are correct (30)
-          if [[ "${{ steps.t_avg_even.outputs.result }}" == *"pass"* ]]; then
-            earned=$((earned + 30))
-            echo "✅ average and even count are correct (30 pts)" >> "$summary"
-          else
-            echo "❌ average and even count are correct (30 pts)" >> "$summary"
-          fi
+          let totalEarned = 0;
+          const lines = ["# Unit 8.5 Autograder Summary"];
+          const detailLines = [];
+          
+          // Iterate over the master list of tests (from 'weights')
+          // This ensures all tests are shown, even if a step failed to produce JSON
+          for (const name of Object.keys(weights)) {
+            const weight = weights[name];
+            
+            // Find the matching result from our parsed 'results' array
+            const res = results.find(r => r['test-name'] === name);
+            
+            let earned = 0;
+            let status = '❌'; // Default to fail
 
-          # script uses array for numbers (15)
-          if [[ "${{ steps.t_array_usage.outputs.result }}" == *"pass"* ]]; then
-            earned=$((earned + 15))
-            echo "✅ script uses array for numbers (15 pts)" >> "$summary"
-          else
-            echo "❌ script uses array for numbers (15 pts)" >> "$summary"
-          fi
+            if (res) {
+                // If we found a result, use its data
+                earned = res['points-earned'] || 0;
+                status = (res.status === 'success') ? '✅' : '❌';
+            }
+            
+            totalEarned += earned;
+            // This builds the line: ✅ test name (15/15 pts)
+            detailLines.push(`${status} ${name} (${earned}/${weight} pts)`);
+          }
+          
+          // Add the total score line
+          lines.push(`**Score: ${totalEarned}/${totalPossible}**`, "");
+          // Add all the individual test lines
+          lines.push(...detailLines);
 
-          echo "" >> "$summary"
-          echo "**Score: ${earned}/${total}**" >> "$summary"
+          // Write to console and to the job summary
+          console.log(lines.join("\n"));
+          const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+          if (summaryPath) fs.appendFileSync(summaryPath, lines.join("\n") + "\n");
+          NODE
 
-      # === Prepare reporter env (for GitHub Classroom) ===
-      - name: Prepare reporter env
-        id: prepEnv
-        shell: bash
-        run: |
-          echo "T_GREEN_ACTION_RESULTS=${{ steps.t_green_action.outputs.result }}"       >> "$GITHUB_ENV"
-          echo "T_YELLOW_ACTION_RESULTS=${{ steps.t_yellow_action.outputs.result }}"     >> "$GITHUB_ENV"
-          echo "T_RED_ACTION_RESULTS=${{ steps.t_red_action.outputs.result }}"           >> "$GITHUB_ENV"
-          echo "T_INVALID_COLOR_RESULTS=${{ steps.t_invalid_color.outputs.result }}"     >> "$GITHUB_ENV"
-          echo "T_AVG_EVEN_RESULTS=${{ steps.t_avg_even.outputs.result }}"               >> "$GITHUB_ENV"
-          echo "T_ARRAY_USAGE_RESULTS=${{ steps.t_array_usage.outputs.result }}"         >> "$GITHUB_ENV"
-
-      # === Report to Classroom ===
+      # Report to Classroom
       - name: Report grades
         uses: classroom-resources/autograding-grading-reporter@v1
         with:
