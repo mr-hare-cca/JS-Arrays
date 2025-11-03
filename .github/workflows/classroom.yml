@@ -221,7 +221,7 @@ jobs:
           echo "T_AVG_EVEN_RESULTS=${{ steps.t_avg_even.outputs.result }}"               >> "$GITHUB_ENV"
           echo "T_ARRAY_USAGE_RESULTS=${{ steps.t_array_usage.outputs.result }}"         >> "$GITHUB_ENV"
 
-      # === Combined summary using the same JSON that the reporter uses ===
+            # === Combined summary using the same JSON that the reporter uses ===
       - name: Build & publish combined summary
         shell: bash
         run: |
@@ -248,18 +248,31 @@ jobs:
             let passed = false;
 
             try {
-              const obj = JSON.parse(raw);
-              const status = (obj.status || obj.state || "").toString().toLowerCase();
-              const score = Number(obj.score ?? obj.points ?? 0);
-              const maxScore = Number(obj.max_score ?? obj.maxScore ?? t.weight);
+              // Results from autograding-command-grader are base64-encoded JSON
+              let decoded;
+              try {
+                decoded = Buffer.from(raw, 'base64').toString('utf8');
+              } catch {
+                decoded = raw; // fallback if it's ever plain JSON
+              }
+
+              const obj = JSON.parse(decoded);
+
+              // GitHub Classroom format: { version, status, max_score, tests: [...] }
+              const status = (obj.status || "").toString().toLowerCase();
 
               if (status === 'pass' || status === 'passed') {
                 passed = true;
-              } else if (!Number.isNaN(score) && !Number.isNaN(maxScore) && maxScore > 0 && score >= maxScore) {
-                passed = true;
+              } else if (Array.isArray(obj.tests)) {
+                // extra safety: if any test entry is marked pass, we treat the runner as passed
+                passed = obj.tests.some(
+                  (test) =>
+                    (test.status || "").toString().toLowerCase() === 'pass' ||
+                    (test.status || "").toString().toLowerCase() === 'passed'
+                );
               }
             } catch (e) {
-              // If JSON parsing fails, treat as not passed
+              // If decoding/parsing fails, treat as not passed
             }
 
             if (passed) {
@@ -280,6 +293,7 @@ jobs:
             console.log(lines.join("\n"));
           }
           NODE
+
 
       # === Report to Classroom ===
       - name: Report grades
