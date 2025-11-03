@@ -59,9 +59,7 @@ jobs:
             });
 
             const logs = [];
-            console.log = (...args) => {
-              logs.push(args.join(' '));
-            };
+            console.log = (...args) => logs.push(args.join(' '));
 
             delete require.cache[scriptPath];
             try {
@@ -78,7 +76,6 @@ jobs:
             test('green action lines', () => {
               const logs = runWithPrompts(['GrEeN', 1, 2, 3, 4, 5]);
               const actions = logs.filter(l => l.startsWith('Action:'));
-              expect(actions.length).toBeGreaterThanOrEqual(5);
               expect(actions.slice(0, 5)).toEqual([
                 'Action: Go',
                 'Action: Go',
@@ -91,7 +88,6 @@ jobs:
             test('yellow action lines', () => {
               const logs = runWithPrompts(['YELLOW', 1, 2, 3, 4, 5]);
               const actions = logs.filter(l => l.startsWith('Action:'));
-              expect(actions.length).toBeGreaterThanOrEqual(5);
               expect(actions.slice(0, 5)).toEqual([
                 'Action: Slow',
                 'Action: Slow',
@@ -104,7 +100,6 @@ jobs:
             test('red action lines', () => {
               const logs = runWithPrompts(['red', 1, 2, 3, 4, 5]);
               const actions = logs.filter(l => l.startsWith('Action:'));
-              expect(actions.length).toBeGreaterThanOrEqual(5);
               expect(actions.slice(0, 5)).toEqual([
                 'Action: Stop',
                 'Action: Stop',
@@ -116,49 +111,29 @@ jobs:
 
             test('invalid color message', () => {
               const logs = runWithPrompts(['blue', 1, 2, 3, 4, 5]);
-              const lower = logs.map(l => l.trim().toLowerCase());
-              const invalidLines = lower.filter(l => l === 'invalid color');
-              expect(invalidLines.length).toBeGreaterThanOrEqual(1);
-
-              const actionLines = logs.filter(l => l.startsWith('Action:'));
-              expect(actionLines.length).toBe(0);
+              expect(logs.map(l => l.toLowerCase())).toContain('invalid color');
+              expect(logs.filter(l => l.startsWith('Action:')).length).toBe(0);
             });
 
             test('average and even count are correct', () => {
               const logs = runWithPrompts(['green', 2, 4, 6, 8, 10]);
-              const avgLine = logs.find(l => l.startsWith('Average:'));
-              const evenLine = logs.find(l => l.startsWith('Even count:'));
-
-              expect(avgLine).toBeDefined();
-              expect(evenLine).toBeDefined();
-              expect(avgLine.trim()).toBe('Average: 6');
-              expect(evenLine.trim()).toBe('Even count: 5');
+              expect(logs).toContain('Average: 6');
+              expect(logs).toContain('Even count: 5');
             });
 
             test('script uses array for numbers', () => {
-              expect(source).toBeTruthy();
-              const hasBracketArray = /\[[^\]]*\]/.test(source);
-              const hasArrayCtor =
-                /new\s+Array\s*\(/i.test(source) || /Array\s*\(/.test(source);
-              const hasPush = /\.push\s*\(/.test(source);
-              const usesIndex =
-                /\[[0-4]\]/.test(source) ||
-                /\[i\]/.test(source) ||
-                /\[index\]/i.test(source);
-
-              expect(hasBracketArray || hasArrayCtor).toBe(true);
-              expect(hasPush || usesIndex).toBe(true);
+              expect(source).toMatch(/\[[^\]]*\]/);
+              expect(source).toMatch(/push\s*\(/);
             });
           });
           EOF
 
-      # === Graded steps (sum to 100) ===
+      # === Graded steps ===
       - id: t_green_action
         name: green action lines
         uses: classroom-resources/autograding-command-grader@v1
         with:
           test-name: green action lines
-          setup-command: echo "ready"
           command: npx jest --runInBand --testNamePattern "green action lines$"
           timeout: 60
           max-score: 15
@@ -168,7 +143,6 @@ jobs:
         uses: classroom-resources/autograding-command-grader@v1
         with:
           test-name: yellow action lines
-          setup-command: echo "ready"
           command: npx jest --runInBand --testNamePattern "yellow action lines$"
           timeout: 60
           max-score: 15
@@ -178,7 +152,6 @@ jobs:
         uses: classroom-resources/autograding-command-grader@v1
         with:
           test-name: red action lines
-          setup-command: echo "ready"
           command: npx jest --runInBand --testNamePattern "red action lines$"
           timeout: 60
           max-score: 15
@@ -188,7 +161,6 @@ jobs:
         uses: classroom-resources/autograding-command-grader@v1
         with:
           test-name: invalid color message
-          setup-command: echo "ready"
           command: npx jest --runInBand --testNamePattern "invalid color message$"
           timeout: 60
           max-score: 10
@@ -198,7 +170,6 @@ jobs:
         uses: classroom-resources/autograding-command-grader@v1
         with:
           test-name: average and even count are correct
-          setup-command: echo "ready"
           command: npx jest --runInBand --testNamePattern "average and even count are correct$"
           timeout: 60
           max-score: 30
@@ -208,95 +179,46 @@ jobs:
         uses: classroom-resources/autograding-command-grader@v1
         with:
           test-name: script uses array for numbers
-          setup-command: echo "ready"
           command: npx jest --runInBand --testNamePattern "script uses array for numbers$"
           timeout: 60
           max-score: 15
 
-      # === Prepare reporter env (MOVED UP) ===
+      # === Combined summary using step outputs ===
+      - name: Build & publish combined summary
+        shell: bash
+        run: |
+          echo "# Unit 8.5 Autograder Summary" >> $GITHUB_STEP_SUMMARY
+          total=0
+          earned=0
+
+          declare -A scores=( ["t_green_action"]=15 ["t_yellow_action"]=15 ["t_red_action"]=15 ["t_invalid_color"]=10 ["t_avg_even"]=30 ["t_array_usage"]=15 )
+          declare -A names=( ["t_green_action"]="green action lines" ["t_yellow_action"]="yellow action lines" ["t_red_action"]="red action lines" ["t_invalid_color"]="invalid color message" ["t_avg_even"]="average and even count are correct" ["t_array_usage"]="script uses array for numbers" )
+
+          for id in "${!scores[@]}"; do
+            total=$((total + scores[$id]))
+            result="${{ steps.${id}.outputs.result }}"
+            if [[ "$result" == *"pass"* ]]; then
+              earned=$((earned + scores[$id]))
+              echo "✅ ${names[$id]} (${scores[$id]} pts)" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ ${names[$id]} (${scores[$id]} pts)" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Score: ${earned}/${total}**" >> $GITHUB_STEP_SUMMARY
+
+      # === Prepare reporter env ===
       - name: Prepare reporter env
         id: prepEnv
         shell: bash
         run: |
-          echo "T_GREEN_ACTION_RESULTS=${{ steps.t_green_action.outputs.result }}"        >> "$GITHUB_ENV"
-          echo "T_YELLOW_ACTION_RESULTS=${{ steps.t_yellow_action.outputs.result }}"      >> "$GITHUB_ENV"
-          echo "T_RED_ACTION_RESULTS=${{ steps.t_red_action.outputs.result }}"            >> "$GITHUB_ENV"
-          echo "T_INVALID_COLOR_RESULTS=${{ steps.t_invalid_color.outputs.result }}"    >> "$GITHUB_ENV"
-          echo "T_AVG_EVEN_RESULTS=${{ steps.t_avg_even.outputs.result }}"                >> "$GITHUB_ENV"
-          echo "T_ARRAY_USAGE_RESULTS=${{ steps.t_array_usage.outputs.result }}"          >> "$GITHUB_ENV"
-
-      # === Build & publish combined summary (FIXED) ===
-      # This step now reads the env variables to build the summary
-      - name: Build & publish combined summary
-        shell: bash
-        run: |
-          node - <<'NODE'
-          const fs = require("fs");
-
-          // Test names from the "test-name" field in each graded step
-          const weights = {
-            "green action lines": 15,
-            "yellow action lines": 15,
-            "red action lines": 15,
-            "invalid color message": 10,
-            "average and even count are correct": 30,
-            "script uses array for numbers": 15
-          };
-
-          // Env variable names set in the "Prepare reporter env" step
-          const resultKeys = [
-            'T_GREEN_ACTION_RESULTS',
-            'T_YELLOW_ACTION_RESULTS',
-            'T_RED_ACTION_RESULTS',
-            'T_INVALID_COLOR_RESULTS',
-            'T_AVG_EVEN_RESULTS',
-            'T_ARRAY_USAGE_RESULTS'
-          ];
-
-          const results = [];
-          for (const key of resultKeys) {
-            try {
-              const resultJSON = process.env[key];
-              if (resultJSON) {
-                results.push(JSON.parse(resultJSON));
-              } else {
-                console.error(`Warning: Environment variable ${key} not found.`);
-              }
-            } catch (e) {
-              console.error(`Could not parse result for ${key}:`, e, process.env[key]);
-            }
-          }
-
-          let totalEarned = 0;
-          let totalPossible = 0;
-          const lines = ["# Unit 8.5 Autograder Summary"];
-          const detailLines = [];
-
-          // This loop builds the lines with the emojis and names
-          for (const res of results) {
-            const name = res['test-name'] || 'Unknown Test';
-            const earned = res['points-earned'] || 0;
-            const possible = res['points-possible'] || 0;
-            
-            // This is where the ✅ and ❌ are set
-            const status = (res.status === 'success') ? '✅' : '❌';
-            
-            totalEarned += earned;
-            const displayPossible = weights[name] || possible; 
-            totalPossible += displayPossible;
-            
-            // This line has the format you want
-            detailLines.push(`${status} ${name} (${earned}/${displayPossible} pts)`);
-          }
-          
-          lines.push(`**Score: ${totalEarned}/${totalPossible}**`, "");
-          lines.push(...detailLines);
-
-          console.log(lines.join("\n"));
-
-          const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-          if (summaryPath) fs.appendFileSync(summaryPath, lines.join("\n") + "\n");
-          NODE
+          echo "T_GREEN_ACTION_RESULTS=${{ steps.t_green_action.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_YELLOW_ACTION_RESULTS=${{ steps.t_yellow_action.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_RED_ACTION_RESULTS=${{ steps.t_red_action.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_INVALID_COLOR_RESULTS=${{ steps.t_invalid_color.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_AVG_EVEN_RESULTS=${{ steps.t_avg_even.outputs.result }}" >> "$GITHUB_ENV"
+          echo "T_ARRAY_USAGE_RESULTS=${{ steps.t_array_usage.outputs.result }}" >> "$GITHUB_ENV"
 
       # === Report to Classroom ===
       - name: Report grades
